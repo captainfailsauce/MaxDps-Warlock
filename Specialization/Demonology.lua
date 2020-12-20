@@ -7,6 +7,7 @@ local Warlock = addonTable.Warlock;
 local MaxDps = MaxDps;
 local UnitPower = UnitPower;
 local GetTime = GetTime;
+local GetTotemInfo = GetTotemInfo;
 local Necrolord = Enum.CovenantType.Necrolord;
 local Venthyr = Enum.CovenantType.Venthyr;
 local NightFae = Enum.CovenantType.NightFae;
@@ -37,8 +38,14 @@ local DE = {
 	DecimatingBolt       = 325289,
 	DemonicConsumption   = 267215,
 	DemonicPower         = 265273,
+	TrollRacial			 = 26297,
+	Felstorm 			 = 89751
+};
 
-	Felstorm = 89751
+local TotemIcons = {
+	[1616211] = 'Vilefiend',
+	[136216]  = 'Felguard',
+	[1378282] = 'Dreadstalker'
 };
 
 setmetatable(DE, Warlock.spellMeta);
@@ -80,13 +87,14 @@ function Warlock:Demonology()
 		soulShards = soulShards + 2;
 	elseif currentSpell == DE.SummonDemonicTyrant then
 		soulShards = 5;
-		if talents[DE.DemonicConsumption] then
-			wildImps = 0;
-		end
 	end
 
 	if soulShards < 0 then
 		soulShards = 0;
+	end
+
+	if soulShards > 5 then
+		soulShard = 5;
 	end
 
 	fd.wildImps = wildImps;
@@ -94,266 +102,121 @@ function Warlock:Demonology()
 	fd.targets = targets;
 	fd.canDS = canDS;
 
-	if talents[DE.GrimoireFelguard] then
-		MaxDps:GlowCooldown(DE.GrimoireFelguard,
-			soulShards >= 1 and cooldown[DE.GrimoireFelguard].ready and cooldown[DE.SummonDemonicTyrant].remains < 13
-		);
+--end setup
+
+--main rotation
+
+--is tyrant ready within 4 seconds?
+if cooldown[DE.SummonDemonicTyrant].remains < 4 and timeToDie > 25
+then
+	return Warlock:DemonologyTyrantPrep();
+end
+
+--no
+	--power siphon
+	if talents[DE.PowerSiphon] and
+		cooldown[DE.PowerSiphon].ready and 
+		soulShards < 4 and
+		wildImps > 1 and
+		not tyrantUp
+	then
+		return DE.PowerSiphon;
 	end
 
-	if forceTyrant then
-		if tyrantTimeLimit < GetTime() then
-			forceTyrant = false;
-		end
-
-		if not cooldown[DE.SummonDemonicTyrant].ready then
-			forceTyrant = false;
-		else
-			if currentSpell ~= DE.SummonDemonicTyrant then
-				return DE.SummonDemonicTyrant;
-			end
-		end
-	end
-
-	-- run_action_list,name=tyrant_prep,if=cooldown.summon_demonic_tyrant.remains<4&!variable.tyrant_ready;
-	if cooldown[DE.SummonDemonicTyrant].remains < 4 and not tyrantReady then
-		return Warlock:DemonologyTyrantPrep();
-	end
-
-	-- run_action_list,name=summon_tyrant,if=variable.tyrant_ready;
-	if tyrantReady then
-		return Warlock:DemonologySummonTyrant();
-	end
-
-	-- summon_vilefiend,if=cooldown.summon_demonic_tyrant.remains>40|time_to_die<cooldown.summon_demonic_tyrant.remains+25;
+	--vilefiend
 	if talents[DE.SummonVilefiend] and
 		cooldown[DE.SummonVilefiend].ready and
-		soulShards >= 1 and
-		currentSpell ~= DE.SummonVilefiend and
-		(cooldown[DE.SummonDemonicTyrant].remains > 40 or timeToDie < cooldown[DE.SummonDemonicTyrant].remains + 25)
+		soulShards > 0 and
+		currentSpell ~= DE.SummonVilefiend and (
+			cooldown[DE.SummonDemonicTyrant].remains > 40 or 
+			timeToDie < cooldown[DE.SummonDemonicTyrant].remains + 25
+			)
 	then
 		return DE.SummonVilefiend;
 	end
 
-	-- call_dreadstalkers;
-	if cooldown[DE.CallDreadstalkers].ready and soulShards >= 2 and currentSpell ~= DE.CallDreadstalkers then
+	--grimoire
+	if talents[DE.GrimoireFelguard] and
+		cooldown[DE.GrimoireFelguard].ready and 
+		soulShards > 0 and (
+			cooldown[DE.SummonDemonicTyrant].remains > 40 or 
+			timeToDie < cooldown[DE.SummonDemonicTyrant].remains + 25
+			)
+	then
+		return DE.GrimoireFelguard;
+	end
+
+	--dreadstalker
+	if cooldown[DE.CallDreadstalkers].ready and
+		soulShards > 1
+	then
 		return DE.CallDreadstalkers;
 	end
 
-	-- doom,if=refreshable;
-	if talents[DE.Doom] and debuff[DE.Doom].refreshable then
-		return DE.Doom;
-	end
-
-	-- demonic_strength;
-	if talents[DE.DemonicStrength] and canDS and cooldown[DE.DemonicStrength].ready then
+	--demonic strength
+	if talents[DE.DemonicStrength] and
+		cooldown[DE.DemonicStrength].ready and 
+		canDS
+	then
 		return DE.DemonicStrength;
 	end
 
-	-- bilescourge_bombers;
-	if talents[DE.BilescourgeBombers] and cooldown[DE.BilescourgeBombers].ready and soulShards >= 2 then
+	--bilescourge bombers
+	if talents[DE.BilescourgeBombers] and
+		cooldown[DE.BilescourgeBombers].ready
+	then
 		return DE.BilescourgeBombers;
 	end
 
-	-- implosion,if=active_enemies>1&!talent.sacrificed_souls.enabled&buff.wild_imps.stack>=8&buff.tyrant.down&cooldown.summon_demonic_tyrant.remains>5;
-	if targets > 1 and
-		not talents[DE.SacrificedSouls] and
-		wildImps >= 8 and
-		not buff[DE.Tyrant].up and
-		cooldown[DE.SummonDemonicTyrant].remains > 5
-	then
-		return DE.Implosion;
-	end
-
-	-- implosion,if=active_enemies>2&buff.wild_imps.stack>=8&buff.tyrant.down;
-	if targets > 2 and wildImps >= 8 and not buff[DE.Tyrant].up then
-		return DE.Implosion;
-	end
-
-	-- hand_of_guldan,if=soul_shard=5|buff.nether_portal.up;
-	if soulShards >= 5 or (buff[DE.NetherPortal].up and soulShards >= 1) then
-		-- soulShards >= 1 and currentSpell ~= DE.HandOfGuldan and ()
-		-- probably doesnt need this check
-		return DE.HandOfGuldan;
-	end
-
-	-- hand_of_guldan,if=soul_shard>=3&cooldown.summon_demonic_tyrant.remains>20&(cooldown.summon_vilefiend.remains>5|!talent.summon_vilefiend.enabled)&cooldown.call_dreadstalkers.remains>2;
-	if currentSpell ~= DE.HandOfGuldan and
-		soulShards >= 3 and
-		cooldown[DE.SummonDemonicTyrant].remains > 20 and
-		(cooldown[DE.SummonVilefiend].remains > 5 or not talents[DE.SummonVilefiend]) and
-		cooldown[DE.CallDreadstalkers].remains > 2
+	--guldan at 3 shards
+	if soulShards > 2 and 
+		currentSpell ~= DE.HandOfGuldan 
 	then
 		return DE.HandOfGuldan;
 	end
-
-	-- call_action_list,name=covenant,if=(covenant.necrolord|covenant.night_fae)&!talent.nether_portal.enabled;
-	if (covenantId == Necrolord or covenantId == NightFae) and
-		not talents[DE.NetherPortal]
+		
+	--decimating bolt if demonic core
+	if buff[DE.DemonicCoreAura].up and
+		cooldown[DE.DecimatingBolt].ready and
+		currentSpell ~= DE.DecimatingBolt
 	then
-		local result = Warlock:DemonologyCovenant();
-		if result then
-			return result;
-		end
+		return DE.DecimatingBolt;
 	end
 
-	-- demonbolt,if=buff.demonic_core.react&soul_shard<4;
-	if buff[DE.DemonicCoreAura].up and soulShards < 4 then
+	--demonbolt if demonic core & <4 shards
+	if buff[DE.DemonicCoreAura].up and
+		soulShards < 4
+	then
 		return DE.Demonbolt;
 	end
 
-	-- grimoire_felguard,if=cooldown.summon_demonic_tyrant.remains+cooldown.summon_demonic_tyrant.duration>time_to_die|time_to_die<cooldown.summon_demonic_tyrant.remains+15;
-	--if cooldown[DE.GrimoireFelguard].ready and
-	--	soulShards >= 1 and (
-	--	cooldown[DE.SummonDemonicTyrant].remains + cooldown[DE.SummonDemonicTyrant].duration > timeToDie or
-	--	timeToDie < cooldown[DE.SummonDemonicTyrant].remains + 15
-	--) then
-	--	return DE.GrimoireFelguard;
-	--end
-
-	-- power_siphon,if=buff.wild_imps.stack>1&buff.demonic_core.stack<3;
-	if talents[DE.PowerSiphon] and cooldown[DE.PowerSiphon].ready and (wildImps > 1 and buff[DE.DemonicCoreAura].count < 3) then
-		return DE.PowerSiphon;
-	end
-
-	-- soul_strike;
-	if talents[DE.SoulStrike] and cooldown[DE.SoulStrike].ready then
+	--soulstrike
+	if talents[DE.SoulStrike] and
+		cooldown[DE.SoulStrike].ready 
+	then
 		return DE.SoulStrike;
 	end
 
-	-- call_action_list,name=covenant;
-	local result = Warlock:DemonologyCovenant();
-	if result then
-		return result;
-	end
-
-	-- shadow_bolt;
-	return DE.ShadowBolt;
-end
-
-function Warlock:DemonologyCovenant()
-	local fd = MaxDps.FrameData;
-	local cooldown = fd.cooldown;
-	local currentSpell = fd.currentSpell;
-	local talents = fd.talents;
-	local targets = fd.targets;
-	local covenantId = fd.covenant.covenantId;
-
-	if covenantId == Venthyr then
-		-- impending_catastrophe,if=!talent.sacrificed_souls.enabled|active_enemies>1;
-		if cooldown[DE.ImpendingCatastrophe].ready and currentSpell ~= DE.ImpendingCatastrophe and
-			(not talents[DE.SacrificedSouls] or targets > 1)
-		then
-			return DE.ImpendingCatastrophe;
-		end
-	end
-
-	if covenantId == Kyrian then
-		-- scouring_tithe,if=talent.sacrificed_souls.enabled&active_enemies=1;
-		if cooldown[DE.ScouringTithe].ready and currentSpell ~= DE.ScouringTithe and
-			(talents[DE.SacrificedSouls] and targets <= 1)
-		then
-			return DE.ScouringTithe;
-		end
-
-		-- scouring_tithe,if=!talent.sacrificed_souls.enabled&active_enemies<4;
-		if cooldown[DE.ScouringTithe].ready and currentSpell ~= DE.ScouringTithe and
-			(not talents[DE.SacrificedSouls] and targets < 4)
-		then
-			return DE.ScouringTithe;
-		end
-	end
-
-	if covenantId == NightFae then
-		-- soul_rot;
-		if cooldown[DE.SoulRot].ready and currentSpell ~= DE.SoulRot then
-			return DE.SoulRot;
-		end
-	end
-
-	if covenantId == Necrolord then
-		-- decimating_bolt;
-		if cooldown[DE.DecimatingBolt].ready and currentSpell ~= DE.DecimatingBolt then
-			return DE.DecimatingBolt;
-		end
-	end
-end
-
-function Warlock:DemonologySummonTyrant()
-	local fd = MaxDps.FrameData;
-	local cooldown = fd.cooldown;
-	local buff = fd.buff;
-	local currentSpell = fd.currentSpell;
-	local talents = fd.talents;
-	local soulShards = fd.soulShards;
-	local wildImps = fd.wildImps;
-
-	-- hand_of_guldan,if=soul_shard=5,line_cd=20;
-	if soulShards == 5 then -- currentSpell ~= DE.HandOfGuldan and
-		return DE.HandOfGuldan;
-	end
-
-	-- demonbolt,if=buff.demonic_core.up&(talent.demonic_consumption.enabled|buff.nether_portal.down),line_cd=20;
-	if buff[DE.DemonicCoreAura].up and (talents[DE.DemonicConsumption] or not buff[DE.NetherPortal].up) then
-		return DE.Demonbolt;
-	end
-
-	-- shadow_bolt,if=buff.wild_imps.stack+incoming_imps<4&(talent.demonic_consumption.enabled|buff.nether_portal.down),line_cd=20;
-	--if --currentSpell ~= DE.ShadowBolt and
-	--	soulShards < 5 and
-	--	wildImps < 4 and
-	--	(talents[DE.DemonicConsumption] or not buff[DE.NetherPortal].up)
-	--then
-	--	return DE.ShadowBolt;
-	--end
-
-	-- call_dreadstalkers;
-	if cooldown[DE.CallDreadstalkers].ready and soulShards >= 2 and currentSpell ~= DE.CallDreadstalkers then
-		return DE.CallDreadstalkers;
-	end
-
-	-- hand_of_guldan;
-	if soulShards >= 3 and currentSpell ~= DE.HandOfGuldan then
-		return DE.HandOfGuldan;
-	end
-
-	-- demonbolt,if=buff.demonic_core.up&buff.nether_portal.up&((buff.vilefiend.remains>5|!talent.summon_vilefiend.enabled)&(buff.grimoire_felguard.remains>5|buff.grimoire_felguard.down));
-	if buff[DE.DemonicCoreAura].up and
-		buff[DE.NetherPortal].up and
-		(
-			(buff[DE.Vilefiend].remains > 5 or not talents[DE.SummonVilefiend]) and
-			(buff[DE.GrimoireFelguard].remains > 5 or not buff[DE.GrimoireFelguard].up)
-		)
+	--decimating bolt
+	if cooldown[DE.DecimatingBolt].ready and
+		currentSpell ~= DE.DecimatingBolt
 	then
-		return DE.Demonbolt;
+		return DE.DecimatingBolt;
 	end
 
-	-- shadow_bolt,if=buff.nether_portal.up&((buff.vilefiend.remains>5|!talent.summon_vilefiend.enabled)&(buff.grimoire_felguard.remains>5|buff.grimoire_felguard.down));
-	if --currentSpell ~= DE.ShadowBolt and
-		buff[DE.NetherPortal].up and
-		(
-			(buff[DE.Vilefiend].remains > 5 or not talents[DE.SummonVilefiend]) and
-			(buff[DE.GrimoireFelguard].remains > 5 or not buff[DE.GrimoireFelguard].up)
-		)
+	--implosion if targets >1 & not guldan cast last & imps>3
+	if targets > 1 and
+		currentSpell ~= DE.HandOfGuldan and
+		wildImps > 3
 	then
-		return DE.ShadowBolt;
+		return DE.Implosion;
 	end
 
-	-- variable,name=tyrant_ready,value=!cooldown.summon_demonic_tyrant.ready;
-	tyrantReady = false;
-
-	-- summon_demonic_tyrant;
-	if cooldown[DE.SummonDemonicTyrant].ready and currentSpell ~= DE.SummonDemonicTyrant then
-		forceTyrant = true;
-		tyrantTimeLimit = GetTime() + 2;
-		return DE.SummonDemonicTyrant;
-	end
-
-	-- shadow_bolt;
-	--if currentSpell ~= DE.ShadowBolt then
-		return DE.ShadowBolt;
-	--end
+	--shadowbolt
+	return DE.ShadowBolt
 end
 
+--yes
 function Warlock:DemonologyTyrantPrep()
 	local fd = MaxDps.FrameData;
 	local cooldown = fd.cooldown;
@@ -363,64 +226,107 @@ function Warlock:DemonologyTyrantPrep()
 	local soulShards = fd.soulShards;
 	local debuff = fd.debuff;
 	local canDS = fd.canDS;
+	local pets = Warlock:Pets();
+	local vilefiendRemains = pets.Vilefiend;
+	local felguardRemains = pets.Felguard;
+	local dreadstalkerRemains = pets.Dreadstalker;
+	local wildImps = GetSpellCount(DE.Implosion); --Warlock:ImpsCount();
 
-	-- doom,line_cd=30;
-	if talents[DE.Doom] and debuff[DE.Doom].refreshable then
-		return DE.Doom;
+	--evaluate readiness for tyrant
+	if wildImps > 3 and
+		(not cooldown[DE.SummonVilefiend].ready or not talents[DE.SummonVilefiend]) and
+		not cooldown[DE.GrimoireFelguard].ready and
+		not cooldown[DE.CallDreadstalkers].ready
+	then
+		tyrantReady = true;
 	end
 
-	-- demonic_strength,if=!talent.demonic_consumption.enabled;
-	if talents[DE.DemonicStrength] and
-		canDS and
-		cooldown[DE.DemonicStrength].ready and
-		not talents[DE.DemonicConsumption]
+	--demonic strength with >3 imps & ds & vf & gr
+	if talents[DE.DemonicStrength] and 
+		cooldown[DE.DemonicStrength].ready and 
+		canDS and 
+		tyrantReady 
 	then
 		return DE.DemonicStrength;
 	end
 
-	-- nether_portal;
-	if talents[DE.NetherPortal] and cooldown[DE.NetherPortal].ready and soulShards >= 1 and currentSpell ~= DE.NetherPortal then
-		return DE.NetherPortal;
+	--summon tyrant with >3 imps & ds & vf & gr
+	if cooldown[DE.SummonDemonicTyrant].ready and 
+		tyrantReady and
+		currentSpell ~= DE.SummonDemonicTyrant 
+	then
+		tyrantReady = false;
+		return DE.SummonDemonicTyrant;
 	end
 
-	-- grimoire_felguard;
-	--if cooldown[DE.GrimoireFelguard].ready and soulShards >= 1 then
-	--	return DE.GrimoireFelguard;
-	--end
+	--grimoire with dreadstalker
+	if cooldown[DE.GrimoireFelguard].ready and 
+		dreadstalkerRemains > 5 and
+		soulShards > 0
+	then 
+		return DE.GrimoireFelguard;
+	end
 
-	-- summon_vilefiend;
+	--vilefiend with dreadstalker
 	if talents[DE.SummonVilefiend] and
 		cooldown[DE.SummonVilefiend].ready and
-		soulShards >= 1 and
+		dreadstalkerRemains > 5 and
+		soulShards > 0 and
 		currentSpell ~= DE.SummonVilefiend
 	then
 		return DE.SummonVilefiend;
 	end
 
-	-- call_dreadstalkers;
-	if cooldown[DE.CallDreadstalkers].ready and soulShards >= 2 and currentSpell ~= DE.CallDreadstalkers then
+	--dreadstalker if at 5 shards
+	if cooldown[DE.CallDreadstalkers].ready and 
+		soulShards > 1 and 
+		currentSpell ~= DE.CallDreadstalkers
+	then
 		return DE.CallDreadstalkers;
 	end
 
-	-- demonbolt,if=buff.demonic_core.up&soul_shard<4&(talent.demonic_consumption.enabled|buff.nether_portal.down);
-	if currentSpell ~= DE.Demonbolt and
-		buff[DE.DemonicCoreAura].up and
-		soulShards < 4 and
-		(talents[DE.DemonicConsumption] or not buff[DE.NetherPortal].up)
+	--guldan at 5 shards or 3 if not 1st cast
+	if (soulShards > 4 and currentSpell ~= DE.HandOfGuldan) or
+		(soulShards > 2 and wildImps and currentSpell ~= DE.HandOfGuldan)
+	then
+		return DE.HandOfGuldan;
+	end
+
+	--demonbolt if core & <4 shards
+	if buff[DE.DemonicCoreAura].up and
+		soulShards < 4 
 	then
 		return DE.Demonbolt;
 	end
 
-	-- shadow_bolt,if=soul_shard<5-4*buff.nether_portal.up;
-	if soulShards < 5 - 4 * buff[DE.NetherPortal].upMath then --currentSpell ~= DE.ShadowBolt and
-		return DE.ShadowBolt;
+	--soulstrike
+	if talents[DE.SoulStrike] and
+		cooldown[DE.SoulStrike].ready
+	then
+		return DE.SoulStrike;
 	end
 
-	-- variable,name=tyrant_ready,value=1;
-	tyrantReady = true;
+	--ShadowBolt
+	return DE.ShadowBolt;
+end
 
-	-- hand_of_guldan;
-	--if soulShards >= 1 and currentSpell ~= DE.HandOfGuldan then
-		return DE.HandOfGuldan;
-	--end
+function Warlock:Pets()
+	local pets = {
+		Vilefiend = 0,
+		Felguard = 0,
+		Dreadstalker = 0
+	};
+
+	for index = 1, MAX_TOTEMS do
+		local hasTotem, totemName, startTime, duration, icon = GetTotemInfo(index);
+		if hasTotem then
+			local totemUnifiedName = TotemIcons[icon];
+			if totemUnifiedName then
+				local remains = startTime + duration - GetTime();
+				pets[totemUnifiedName] = remains;
+			end
+		end
+	end
+
+	return pets;
 end
